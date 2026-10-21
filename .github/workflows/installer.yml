@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026-present Open Handheld Collective
+#   https://github.com/OpenHandheldCollective
+# On a push or pull request, runs the tests and builds a debug APK. On a tag
+# v* (or a manual run, which uses VERSION), builds the signed APK and attaches
+# it, with SHA256SUMS, to the release v<VERSION>.
+name: Installer
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Test and build
+        run: ./gradlew test assembleDebug
+
+  release:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # The release is v<VERSION>. A tag push has to name the same version.
+      - name: Read the version
+        run: |
+          version=$(tr -d '[:space:]' < VERSION)
+          echo "$version" | grep -Eq '^[0-9]+\.[0-9]+(\.[0-9]+)?$' || { echo "VERSION '$version' is not like 1.0 or 1.0.1" >&2; exit 1; }
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "Tag $GITHUB_REF_NAME doesn't match VERSION $version" >&2
+            exit 1
+          fi
+          echo "TAG=v$version" >> "$GITHUB_ENV"
+
+      - name: Build
+        env:
+          KEYSTORE: ${{ secrets.INSTALLER_KEYSTORE }}
+          OPENABL_KEYSTORE_PASSWORD: ${{ secrets.INSTALLER_KEYSTORE_PASSWORD }}
+          OPENABL_KEY_ALIAS: ${{ secrets.INSTALLER_KEY_ALIAS }}
+          OPENABL_KEY_PASSWORD: ${{ secrets.INSTALLER_KEY_PASSWORD }}
+        run: |
+          [ -n "$KEYSTORE" ] || { echo "INSTALLER_KEYSTORE is not set: an unsigned APK can't be installed" >&2; exit 1; }
+          echo "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/installer.jks"
+          export OPENABL_KEYSTORE="$RUNNER_TEMP/installer.jks"
+          ./gradlew test assembleRelease
+
+      - name: Attach to the release
+        run: |
+          name=openabl-installer-$TAG.apk
+          cp app/build/outputs/apk/release/app-release.apk "$name"
+          sha256sum "$name" > SHA256SUMS
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$name" SHA256SUMS --clobber
+          else
+            gh release create "$TAG" "$name" SHA256SUMS --target "$GITHUB_SHA" \
+              --title "OpenABL Installer $TAG" \
+              --notes "The OpenABL installer. It downloads the newest OpenABL release for your chip. SHA256 of the APK is in \`SHA256SUMS\`."
+          fi
