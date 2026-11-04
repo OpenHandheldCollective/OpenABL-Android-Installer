@@ -20,6 +20,10 @@ data class Device(
         LISTED.any { l -> squash(l).let { it in names || names.any { n -> n.length >= 6 && it.endsWith(n) } } }
     }
 
+    // Lenovo's tablets are not handhelds: their bootloader chain crash-loops on
+    // OpenABL and only an EDL cable gets them back.
+    val refused: Boolean get() = maker.equals("lenovo", ignoreCase = true)
+
     companion object {
         private fun squash(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
 

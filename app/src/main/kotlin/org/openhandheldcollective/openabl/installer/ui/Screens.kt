@@ -82,9 +82,12 @@ private fun facts(i: Installer): List<Fact> {
 
 private fun homeLines(i: Installer, context: Context, finish: () -> Unit): List<Line> {
     val out = ArrayList<Line>()
-    if (i.chip == null) {
+    if (i.chip == null || i.device.refused) {
         out += Line.Head("Not supported")
-        out += Line.Text("OpenABL has no image for this chip. It supports $SUPPORTED.")
+        out += Line.Text(
+            if (i.chip == null) "OpenABL has no image for this chip. It supports $SUPPORTED."
+            else "OpenABL doesn't work on Lenovo tablets. Installing it leaves the tablet crash looping, and only an EDL cable brings it back.",
+        )
         out += Line.Head("About")
         out += Line.Item(Icon.File, "Credits", chevron = true) { i.screen = Screen.Licenses }
         out += Line.Item(Icon.Exit, "Close") { finish() }
