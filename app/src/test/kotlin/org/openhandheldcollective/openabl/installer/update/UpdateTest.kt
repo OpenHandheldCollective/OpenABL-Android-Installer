@@ -13,10 +13,17 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UpdateTest {
+    @After fun resetHooks() {
+        Update.resolver = { null }
+        Update.exists = { false }
+        Update.opener = { throw IllegalStateException("network") }
+    }
+
     private fun release(tag: String, assets: List<String>) = JSONObject(
         """{"tag_name":"$tag","assets":[${assets.joinToString(",") { """{"name":"$it","browser_download_url":"https://x/$it"}""" }}]}""",
     )
@@ -138,5 +145,99 @@ class UpdateTest {
         assertNull(Update.parseApp(release("v1.1", listOf("SHA256SUMS")), "1.0"))
         assertNull(Update.parseApp(release("v1.0", listOf("openabl-installer-v1.0.apk")), "1.0"))
         assertEquals("1.1", Update.parseApp(release("v1.1", listOf("openabl-installer-v1.1.apk")), "1.0")!!.version)
+    }
+
+    private val web = "https://github.com/OpenHandheldCollective/OpenABL/releases/download/v1.2"
+
+    @Test fun webRouteBuildsTheFixedUrls() {
+        Update.resolver = { "https://github.com/OpenHandheldCollective/OpenABL/releases/tag/v1.2" }
+        val r = Update.latest("SM8650")
+        assertEquals("1.2", r.version)
+        assertEquals("abl_signed-SM8650.elf", r.elf!!.name)
+        assertEquals("$web/abl_signed-SM8650.elf", r.elf!!.url)
+        assertEquals("$web/abl_signed-SM8650.elf.sha256", r.elfSum!!.url)
+        assertEquals("$web/SHA256SUMS", r.sums!!.url)
+        assertTrue(r.usable)
+        assertNull(Update.latest(null).elf)
+    }
+
+    @Test fun latestFallsBackToTheApiWithoutARedirect() {
+        val json = release("v1.1", listOf("abl_signed-SM8650.elf", "SHA256SUMS")).toString()
+        Update.opener = { url ->
+            assertTrue(url.startsWith("https://api.github.com/"))
+            json.byteInputStream()
+        }
+        for (loc in listOf<String?>(null, "https://github.com/x/y/releases/tag/nightly")) {
+            Update.resolver = { loc }
+            val r = Update.latest("SM8650")
+            assertEquals("1.1", r.version)
+            assertEquals("https://x/abl_signed-SM8650.elf", r.elf!!.url)
+        }
+        Update.resolver = { throw java.io.IOException("offline") }
+        assertEquals("1.1", Update.latest("SM8650").version)
+    }
+
+    @Test fun onlyThePerImageChecksumIsEnoughWhenSumsAreMissing() {
+        val img = "image".toByteArray()
+        val files = mapOf("abl_signed-SM8650.elf" to img, "abl_signed-SM8650.elf.sha256" to "${sha(img)}  abl_signed-SM8650.elf\n".toByteArray())
+        withFake(files) { dir ->
+            Update.resolver = { "https://github.com/OpenHandheldCollective/OpenABL/releases/tag/v1.2" }
+            val dest = File(dir, "1.2")
+            Update.download(Update.latest("SM8650"), dest)
+            assertEquals("image", File(dest, "abl_signed-SM8650.elf").readText())
+        }
+    }
+
+    @Test fun sumsThatDontListTheImageFallBackToThePerImageChecksum() {
+        val img = "image".toByteArray()
+        val files = mapOf(
+            "abl_signed-SM8650.elf" to img,
+            "SHA256SUMS" to "${"1".repeat(64)}  abl_signed-SM8250.elf\n".toByteArray(),
+            "abl_signed-SM8650.elf.sha256" to "${sha(img)}\n".toByteArray(),
+        )
+        withFake(files) { dir ->
+            Update.download(Update.webRelease("v1.2", "SM8650"), File(dir, "1.2"))
+            assertTrue(File(dir, "1.2/abl_signed-SM8650.elf").exists())
+        }
+    }
+
+    @Test fun noChecksumAtAllFailsAsBefore() {
+        withFake(mapOf("abl_signed-SM8650.elf" to "image".toByteArray())) { dir ->
+            val e = runCatching { Update.download(Update.webRelease("v1.2", "SM8650"), File(dir, "1.2")) }.exceptionOrNull()
+            assertTrue(e is UpdateException)
+            assertTrue(!File(dir, "1.2").exists())
+        }
+    }
+
+    @Test fun aMissingImageIsReportedAsNoImageForThisDevice() {
+        withFake(emptyMap()) { dir ->
+            val e = runCatching { Update.download(Update.webRelease("v1.2", "SM8650"), File(dir, "1.2")) }.exceptionOrNull()
+            assertEquals("This release has no image for this device.", e!!.message)
+        }
+        val sum = "${"1".repeat(64)}  abl_signed-SM8650.elf\n"
+        withFake(mapOf("SHA256SUMS" to sum.toByteArray())) { dir ->
+            val e = runCatching { Update.download(Update.webRelease("v1.2", "SM8650"), File(dir, "1.2")) }.exceptionOrNull()
+            assertEquals("This release has no image for this device.", e!!.message)
+        }
+    }
+
+    @Test fun rateLimitMessageNamesTheResetTimeOrAnHour() {
+        val utc = java.util.TimeZone.getTimeZone("UTC")
+        assertEquals("GitHub is limiting requests from this network. Try again after 22:13.", Update.limitMessage(1_700_000_000L, utc))
+        assertEquals("GitHub is limiting requests from this network. Try again in an hour.", Update.limitMessage(null))
+    }
+
+    @Test fun latestAppUsesTheReleasePage() {
+        val base = "https://github.com/OpenHandheldCollective/OpenABL-Android-Installer"
+        val asked = ArrayList<String>()
+        Update.resolver = { "$base/releases/tag/v1.3" }
+        Update.exists = { asked += it; true }
+        val r = Update.latestApp("1.2")!!
+        assertEquals("1.3", r.version)
+        assertEquals("$base/releases/tag/v1.3", r.page)
+        assertEquals(listOf("$base/releases/download/v1.3/openabl-installer-v1.3.apk"), asked)
+        assertNull(Update.latestApp("1.3"))
+        Update.exists = { false }
+        assertNull(Update.latestApp("1.2"))
     }
 }

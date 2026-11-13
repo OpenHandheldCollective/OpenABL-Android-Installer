@@ -15,6 +15,7 @@ class ChipTest {
         assertEquals(Chip.SM8550, Chip.identify(" sm8550p ", null))
         assertEquals(Chip.SM8250, Chip.identify("SM8250-AC", ""))
         assertEquals(Chip.SM8750, Chip.identify("SM8750", ""))
+        assertEquals(Chip.SM8750, Chip.identify("CQ8725S", "sun"))
         assertEquals(Chip.SDM845, Chip.identify("SDM845", ""))
     }
 
@@ -23,6 +24,9 @@ class ChipTest {
         assertEquals(Chip.SM8650, Chip.identify("unknown", "PINEAPPLE"))
         assertEquals(Chip.SM8250, Chip.identify(null, "kona"))
         assertNull(Chip.identify("SM8350", "pineapple"))
+        assertEquals(Chip.SM8750, Chip.identify("CQ9000", "sun"))
+        assertEquals(Chip.SM8550, Chip.identify("Q8 Gen 2", "kalama"))
+        assertNull(Chip.identify("CQ9000", "lahaina"))
     }
 
     @Test fun unsupported() {

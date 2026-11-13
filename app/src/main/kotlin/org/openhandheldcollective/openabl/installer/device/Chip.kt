@@ -13,18 +13,20 @@ enum class Chip(val id: String, val soc: String, val models: List<String>, val p
     SM8250("SM8250", "Snapdragon 865", listOf("SM8250", "QCS8250"), listOf("kona")),
     SM8550("SM8550", "Snapdragon 8 Gen 2", listOf("SM8550", "QCS8550"), listOf("kalama")),
     SM8650("SM8650", "Snapdragon 8 Gen 3", listOf("SM8650", "QCS8650"), listOf("pineapple")),
-    SM8750("SM8750", "Snapdragon 8 Elite", listOf("SM8750", "QCS8750", "SM7750", "QCS7790"), listOf("sun"));
+    SM8750("SM8750", "Snapdragon 8 Elite", listOf("SM8750", "QCS8750", "SM7750", "QCS7790", "CQ8725"), listOf("sun"));
 
     val label get() = "$soc ($id)"
     val short get() = "${soc.removePrefix("Snapdragon ")} ($id)"
     val image get() = "abl_signed-$id.elf"
 
     companion object {
-        // Retroid reports the QCS name. The platform is used only when the model is empty.
+        // Retroid reports the QCS name, the AYN Odin 3 CQ8725S. A plain SM or SDM name that isn't
+        // listed is another chip. Any other name falls back to the platform, which stays the same.
         fun identify(socModel: String?, platform: String?): Chip? {
             val model = socModel.orEmpty().trim().uppercase()
             if (model.isNotEmpty() && model != "UNKNOWN") {
-                return entries.firstOrNull { c -> c.models.any { model.startsWith(it) } }
+                entries.firstOrNull { c -> c.models.any { model.startsWith(it) } }?.let { return it }
+                if (Regex("^SD?M\\d").containsMatchIn(model)) return null
             }
             val board = platform.orEmpty().trim().lowercase()
             return entries.firstOrNull { board in it.platforms }
